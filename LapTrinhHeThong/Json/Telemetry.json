@@ -1,0 +1,468 @@
+[
+    {
+        "id": "e0fc05c9210efc5c",
+        "type": "tab",
+        "label": "ESP32 Telemetry Dashboard",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "c2ea28fa9f60d73c",
+        "type": "mqtt in",
+        "z": "e0fc05c9210efc5c",
+        "name": "MQTT Telemetry",
+        "topic": "esp32/telemetry",
+        "qos": "0",
+        "datatype": "auto",
+        "broker": "69dcb95751d966f5",
+        "nl": false,
+        "rap": false,
+        "inputs": 0,
+        "x": 140,
+        "y": 100,
+        "wires": [
+            [
+                "d3cec71ca55e4789"
+            ]
+        ]
+    },
+    {
+        "id": "d3cec71ca55e4789",
+        "type": "json",
+        "z": "e0fc05c9210efc5c",
+        "name": "Parse JSON",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 330,
+        "y": 100,
+        "wires": [
+            [
+                "7b53b335b51991ce"
+            ]
+        ]
+    },
+    {
+        "id": "7b53b335b51991ce",
+        "type": "function",
+        "z": "e0fc05c9210efc5c",
+        "name": "Chuẩn hóa dữ liệu",
+        "func": "let data = msg.payload;\n\nlet rainStatus = (data.raining === \"true\" || data.raining === true) ? \"🌧 Có mưa\" : \"☀️ Không mưa\";\n\nmsg.payload = {\n    nhietdo: parseFloat(data.temp_c),\n    doam: parseFloat(data.hum_pct),\n    dat: parseFloat(data.soil_pct),\n    anhsang: parseFloat(data.light_pct),\n    tank: data.tank === \"Đầy\" ? \"🪣 Đầy\" : \"🪣 Hết\",\n    mua: rainStatus,\n    chedo: data.mode === \"Thủ công\" ? \"Thủ công 🖐\" : \"Tự động 🤖\",\n    bom: data.pump === \"Bật\" ? \"Bật 🚰\" : \"Tắt ⛔\"\n};\n\n// Phục vụ chart tổng hợp\nreturn [{\n    payload: [\n        {series:[\"Nhiệt độ\"], data:[{x:Date.now(), y:msg.payload.nhietdo}]},\n        {series:[\"Độ ẩm\"], data:[{x:Date.now(), y:msg.payload.doam}]},\n        {series:[\"Đất\"], data:[{x:Date.now(), y:msg.payload.dat}]},\n        {series:[\"Ánh sáng\"], data:[{x:Date.now(), y:msg.payload.anhsang}]}\n    ]\n}, msg];",
+        "outputs": 2,
+        "x": 550,
+        "y": 100,
+        "wires": [
+            [],
+            [
+                "2ce1b653d6ae65b4",
+                "3416ac0935d2aaeb",
+                "cce02b98e27ca88a",
+                "f1e38e7714570d8c",
+                "4fd7b35018fa62fc",
+                "79633d4ddcc89b85",
+                "1412eed37503dccc",
+                "a2b55bbd0dcd95c1",
+                "temp_fn",
+                "hum_fn",
+                "soil_fn",
+                "light_fn"
+            ]
+        ]
+    },
+    {
+        "id": "2ce1b653d6ae65b4",
+        "type": "ui_gauge",
+        "z": "e0fc05c9210efc5c",
+        "name": "🌡 Nhiệt độ",
+        "group": "group_sensors",
+        "order": 1,
+        "gtype": "gage",
+        "title": "🌡 Nhiệt độ",
+        "label": "°C",
+        "format": "{{msg.payload.nhietdo}}",
+        "min": 0,
+        "max": 50,
+        "colors": [
+            "#00ff00",
+            "#ffff00",
+            "#ff0000"
+        ],
+        "x": 800,
+        "y": 100,
+        "wires": []
+    },
+    {
+        "id": "3416ac0935d2aaeb",
+        "type": "ui_gauge",
+        "z": "e0fc05c9210efc5c",
+        "name": "💧 Độ ẩm",
+        "group": "group_sensors",
+        "order": 2,
+        "gtype": "gage",
+        "title": "💧 Độ ẩm",
+        "label": "%",
+        "format": "{{msg.payload.doam}}",
+        "min": 0,
+        "max": 100,
+        "colors": [
+            "#ff0000",
+            "#ffff00",
+            "#00ff00"
+        ],
+        "x": 800,
+        "y": 140,
+        "wires": []
+    },
+    {
+        "id": "cce02b98e27ca88a",
+        "type": "ui_gauge",
+        "z": "e0fc05c9210efc5c",
+        "name": "🌱 Đất",
+        "group": "group_sensors",
+        "order": 3,
+        "gtype": "gage",
+        "title": "🌱 Độ ẩm đất",
+        "label": "%",
+        "format": "{{msg.payload.dat}}",
+        "min": 0,
+        "max": 100,
+        "colors": [
+            "#ff0000",
+            "#ffff00",
+            "#00ff00"
+        ],
+        "x": 800,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "f1e38e7714570d8c",
+        "type": "ui_gauge",
+        "z": "e0fc05c9210efc5c",
+        "name": "☀️ Ánh sáng",
+        "group": "group_sensors",
+        "order": 4,
+        "gtype": "gage",
+        "title": "☀️ Ánh sáng",
+        "label": "%",
+        "format": "{{msg.payload.anhsang}}",
+        "min": 0,
+        "max": 100,
+        "colors": [
+            "#0000ff",
+            "#ffff00",
+            "#ffaa00"
+        ],
+        "x": 800,
+        "y": 220,
+        "wires": []
+    },
+    {
+        "id": "4fd7b35018fa62fc",
+        "type": "ui_template",
+        "z": "e0fc05c9210efc5c",
+        "group": "group_status",
+        "name": "Tank Card",
+        "order": 1,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:10px; background-color:#e0f7fa; border-radius:12px; text-align:center; font-size:20px;\">\n  <b>Bể nước:</b> {{msg.payload.tank}}\n</div>",
+        "x": 820,
+        "y": 280,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "79633d4ddcc89b85",
+        "type": "ui_template",
+        "z": "e0fc05c9210efc5c",
+        "group": "group_status",
+        "name": "Mode Card",
+        "order": 2,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:10px; background-color:#fff3e0; border-radius:12px; text-align:center; font-size:20px;\">\n  <b>Chế độ:</b> {{msg.payload.chedo}}\n</div>",
+        "x": 820,
+        "y": 320,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "1412eed37503dccc",
+        "type": "ui_template",
+        "z": "e0fc05c9210efc5c",
+        "group": "group_status",
+        "name": "Pump Card",
+        "order": 3,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:10px; background-color:#e8f5e9; border-radius:12px; text-align:center; font-size:20px;\">\n  <b>Bơm:</b> {{msg.payload.bom}}\n</div>",
+        "x": 820,
+        "y": 360,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "a2b55bbd0dcd95c1",
+        "type": "ui_template",
+        "z": "e0fc05c9210efc5c",
+        "group": "group_status",
+        "name": "Rain Card",
+        "order": 4,
+        "width": 0,
+        "height": 0,
+        "format": "<div style=\"padding:10px; background-color:#ede7f6; border-radius:12px; text-align:center; font-size:20px;\">\n  <b>Thời tiết:</b> {{msg.payload.mua}}\n</div>",
+        "x": 820,
+        "y": 400,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "temp_fn",
+        "type": "function",
+        "z": "e0fc05c9210efc5c",
+        "name": "Temperature",
+        "func": "msg.payload = msg.payload.nhietdo;\nreturn msg;",
+        "outputs": 1,
+        "x": 370,
+        "y": 460,
+        "wires": [
+            [
+                "temp_chart"
+            ]
+        ]
+    },
+    {
+        "id": "hum_fn",
+        "type": "function",
+        "z": "e0fc05c9210efc5c",
+        "name": "Humidity",
+        "func": "msg.payload = msg.payload.doam;\nreturn msg;",
+        "outputs": 1,
+        "x": 370,
+        "y": 500,
+        "wires": [
+            [
+                "hum_chart"
+            ]
+        ]
+    },
+    {
+        "id": "soil_fn",
+        "type": "function",
+        "z": "e0fc05c9210efc5c",
+        "name": "Soil Moisture",
+        "func": "msg.payload = msg.payload.dat;\nreturn msg;",
+        "outputs": 1,
+        "x": 370,
+        "y": 540,
+        "wires": [
+            [
+                "soil_chart"
+            ]
+        ]
+    },
+    {
+        "id": "light_fn",
+        "type": "function",
+        "z": "e0fc05c9210efc5c",
+        "name": "Light",
+        "func": "msg.payload = msg.payload.anhsang;\nreturn msg;",
+        "outputs": 1,
+        "x": 370,
+        "y": 580,
+        "wires": [
+            [
+                "light_chart"
+            ]
+        ]
+    },
+    {
+        "id": "temp_chart",
+        "type": "ui_chart",
+        "z": "e0fc05c9210efc5c",
+        "name": "Nhiệt độ",
+        "group": "group_history",
+        "order": 1,
+        "label": "🌡 Nhiệt độ",
+        "chartType": "line",
+        "xformat": "HH:mm:ss",
+        "ymin": "0",
+        "ymax": "50",
+        "removeOlder": "1",
+        "removeOlderUnit": "3600",
+        "colors": [
+            "#ff0000"
+        ],
+        "outputs": 1,
+        "x": 590,
+        "y": 460,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "hum_chart",
+        "type": "ui_chart",
+        "z": "e0fc05c9210efc5c",
+        "name": "Độ ẩm",
+        "group": "group_history",
+        "order": 2,
+        "label": "💧 Độ ẩm",
+        "chartType": "line",
+        "xformat": "HH:mm:ss",
+        "ymin": "0",
+        "ymax": "100",
+        "removeOlder": "1",
+        "removeOlderUnit": "3600",
+        "colors": [
+            "#0000ff"
+        ],
+        "outputs": 1,
+        "x": 590,
+        "y": 500,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "soil_chart",
+        "type": "ui_chart",
+        "z": "e0fc05c9210efc5c",
+        "name": "Độ ẩm đất",
+        "group": "group_history",
+        "order": 3,
+        "label": "🌱 Độ ẩm đất",
+        "chartType": "line",
+        "xformat": "HH:mm:ss",
+        "ymin": "0",
+        "ymax": "100",
+        "removeOlder": "1",
+        "removeOlderUnit": "3600",
+        "colors": [
+            "#00aa00"
+        ],
+        "outputs": 1,
+        "x": 590,
+        "y": 540,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "light_chart",
+        "type": "ui_chart",
+        "z": "e0fc05c9210efc5c",
+        "name": "Ánh sáng",
+        "group": "group_history",
+        "order": 4,
+        "label": "☀️ Ánh sáng",
+        "chartType": "line",
+        "xformat": "HH:mm:ss",
+        "ymin": "0",
+        "ymax": "100",
+        "removeOlder": "1",
+        "removeOlderUnit": "3600",
+        "colors": [
+            "#ffaa00"
+        ],
+        "outputs": 1,
+        "x": 590,
+        "y": 580,
+        "wires": [
+            []
+        ]
+    },
+    {
+        "id": "69dcb95751d966f5",
+        "type": "mqtt-broker",
+        "name": "MQTT",
+        "broker": "b75315a3408e471b9a0617e5da3214a0.s1.eu.hivemq.cloud",
+        "port": "8883",
+        "tls": "tls1",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": true,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "group_sensors",
+        "type": "ui_group",
+        "name": "Cảm biến",
+        "tab": "tab_dashboard",
+        "order": 1,
+        "disp": true,
+        "width": "6"
+    },
+    {
+        "id": "group_status",
+        "type": "ui_group",
+        "name": "Trạng thái",
+        "tab": "tab_dashboard",
+        "order": 2,
+        "disp": true,
+        "width": "6"
+    },
+    {
+        "id": "group_history",
+        "type": "ui_group",
+        "name": "Lịch sử cảm biến",
+        "tab": "tab_dashboard",
+        "order": 3,
+        "disp": true,
+        "width": "12"
+    },
+    {
+        "id": "tls1",
+        "type": "tls-config",
+        "name": "HiveMQ TLS",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "",
+        "servername": "",
+        "verifyservercert": false,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "tab_dashboard",
+        "type": "ui_tab",
+        "name": "Smart Irrigation",
+        "icon": "dashboard",
+        "order": 1
+    },
+    {
+        "id": "2a75b4e80d72b636",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]

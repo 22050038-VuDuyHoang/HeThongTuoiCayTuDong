@@ -1,0 +1,184 @@
+[
+    {
+        "id": "3ebc5adfad66405b",
+        "type": "tab",
+        "label": "Điều khiển ESP32",
+        "disabled": false,
+        "info": ""
+    },
+    {
+        "id": "c7562267571a1c2b",
+        "type": "mqtt out",
+        "z": "3ebc5adfad66405b",
+        "name": "Command",
+        "topic": "esp32/cmd",
+        "qos": "",
+        "retain": "",
+        "broker": "69dcb95751d966f5",
+        "x": 520,
+        "y": 180,
+        "wires": []
+    },
+    {
+        "id": "ccf0499c90898416",
+        "type": "ui_button",
+        "z": "3ebc5adfad66405b",
+        "group": "group_controls",
+        "order": 1,
+        "width": "6",
+        "height": "1",
+        "label": "Chế độ AUTO",
+        "color": "#ffffff",
+        "bgcolor": "#1E90FF",
+        "icon": "fa-exchange-alt",
+        "payload": "MODE:AUTO",
+        "payloadType": "str",
+        "topic": "esp32/cmd",
+        "x": 200,
+        "y": 140,
+        "wires": [
+            [
+                "c7562267571a1c2b"
+            ]
+        ]
+    },
+    {
+        "id": "73fde8e1b2d61b44",
+        "type": "ui_button",
+        "z": "3ebc5adfad66405b",
+        "group": "group_controls",
+        "order": 2,
+        "width": "6",
+        "height": "1",
+        "label": "Chế độ MANUAL",
+        "color": "#ffffff",
+        "bgcolor": "#FFA500",
+        "icon": "fa-exchange-alt",
+        "payload": "MODE:MANUAL",
+        "payloadType": "str",
+        "topic": "esp32/cmd",
+        "x": 200,
+        "y": 200,
+        "wires": [
+            [
+                "c7562267571a1c2b"
+            ]
+        ]
+    },
+    {
+        "id": "b34e7ddce4a10f9f",
+        "type": "ui_button",
+        "z": "3ebc5adfad66405b",
+        "group": "group_controls",
+        "order": 3,
+        "width": "6",
+        "height": "1",
+        "label": "Bơm ON",
+        "color": "#ffffff",
+        "bgcolor": "#32CD32",
+        "icon": "fa-tint",
+        "payload": "PUMP:ON",
+        "payloadType": "str",
+        "topic": "esp32/cmd",
+        "x": 200,
+        "y": 260,
+        "wires": [
+            [
+                "c7562267571a1c2b"
+            ]
+        ]
+    },
+    {
+        "id": "62c066f4d039b489",
+        "type": "ui_button",
+        "z": "3ebc5adfad66405b",
+        "group": "group_controls",
+        "order": 4,
+        "width": "6",
+        "height": "1",
+        "label": "Bơm OFF",
+        "color": "#ffffff",
+        "bgcolor": "#FF4500",
+        "icon": "fa-tint",
+        "payload": "PUMP:OFF",
+        "payloadType": "str",
+        "topic": "esp32/cmd",
+        "x": 200,
+        "y": 320,
+        "wires": [
+            [
+                "c7562267571a1c2b"
+            ]
+        ]
+    },
+    {
+        "id": "69dcb95751d966f5",
+        "type": "mqtt-broker",
+        "name": "MQTT",
+        "broker": "b75315a3408e471b9a0617e5da3214a0.s1.eu.hivemq.cloud",
+        "port": "8883",
+        "tls": "tls1",
+        "clientid": "",
+        "autoConnect": true,
+        "usetls": true,
+        "protocolVersion": 4,
+        "keepalive": 60,
+        "cleansession": true,
+        "autoUnsubscribe": true,
+        "birthTopic": "",
+        "birthQos": "0",
+        "birthRetain": "false",
+        "birthPayload": "",
+        "birthMsg": {},
+        "closeTopic": "",
+        "closeQos": "0",
+        "closeRetain": "false",
+        "closePayload": "",
+        "closeMsg": {},
+        "willTopic": "",
+        "willQos": "0",
+        "willRetain": "false",
+        "willPayload": "",
+        "willMsg": {},
+        "userProps": "",
+        "sessionExpiry": ""
+    },
+    {
+        "id": "group_controls",
+        "type": "ui_group",
+        "name": "Điều khiển",
+        "tab": "tab_dashboard",
+        "order": 3,
+        "disp": true,
+        "width": "6"
+    },
+    {
+        "id": "tls1",
+        "type": "tls-config",
+        "name": "HiveMQ TLS",
+        "cert": "",
+        "key": "",
+        "ca": "",
+        "certname": "",
+        "keyname": "",
+        "caname": "",
+        "servername": "",
+        "verifyservercert": false,
+        "alpnprotocol": ""
+    },
+    {
+        "id": "tab_dashboard",
+        "type": "ui_tab",
+        "name": "Smart Irrigation",
+        "icon": "dashboard",
+        "order": 1
+    },
+    {
+        "id": "fbf14ae63553b801",
+        "type": "global-config",
+        "env": [],
+        "modules": {
+            "node-red-dashboard": "3.6.6"
+        }
+    }
+]
