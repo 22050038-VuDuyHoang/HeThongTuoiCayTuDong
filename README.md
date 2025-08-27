@@ -1,6 +1,8 @@
 HỆ THÔNG TƯỚI CÂY TỰ ĐỘNG  
+  
 Thành viên:   Vũ Duy Hoàng  
                 Nguyễn Hoàng Vũ  
+                  
 Mô tả hệ thống tưới cây tự động:
 - Hệ thống tưới cây tự động sử dụng vi điều khiển ESP32 kết hợp với các cảm biến (độ ẩm đất, mưa, nhiệt độ & độ ẩm không khí DHT22, ánh sáng LDR, mực nước) để thu thập dữ liệu môi trường và quyết định bật/tắt bơm qua relay. Hệ thống hỗ trợ hai chế độ hoạt động:
 - Tự động (Auto): dựa vào dữ liệu cảm biến và ngưỡng cài đặt để tự động tưới khi đất khô, dừng khi đủ ẩm, trời mưa hoặc bồn cạn nước.
