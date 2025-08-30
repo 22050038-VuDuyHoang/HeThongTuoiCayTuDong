@@ -4,6 +4,12 @@
  * - publishSem (Counting) gom nhiều tín hiệu -> publish 1 lần
  * - dataMutex (Mutex) bảo vệ dữ liệu dùng chung
  * Tích hợp water sensor đỏ làm cảm biến MƯA (analog) và xuất chung 1 dòng
+ *
+ * Tối ưu:
+ * - Chỉ in PRETTY ra Serial; TELE chỉ publish (không in) để giảm nghẽn
+ * - Tăng TELE_PERIOD_MS = 30000 (30s) để giảm tần suất
+ * - Thêm delay trong mqttTask để tránh busy-loop
+ * - Tránh in "nan" bằng kiểm tra isnan
  ******************************************************/
 
 #include <WiFi.h>
@@ -11,7 +17,7 @@
 #include <WiFiClientSecure.h>
 #include <DHT.h>
 
-// FreeRTOS headers (để dùng semaphore/mutex rõ ràng)
+// FreeRTOS headers
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -36,81 +42,73 @@ const char* TOPIC_CMD    = "esp32/cmd";
 const char* TOPIC_PRETTY = "esp32/test";        // chuỗi "đẹp"
 
 /* ================== Pin & Sensors ================== */
-// Chân phần cứng bạn đang dùng
 #define DHTPIN 27
 #define DHTTYPE DHT22
 #define SOIL_PIN 34
 #define LDR_PIN  35
-#define WATER_TANK_PIN 32   // digital input (module mức nước) -- nếu module là analog thì đổi xử lý
+#define WATER_TANK_PIN 32
 #define RELAY_PIN 23
 #define LED_PUMP 2
-#define RAIN_PIN 33         // water sensor đỏ => đọc analog trên ESP32
+#define RAIN_PIN 33         // analog
 
-/* Buttons (nút nhấn, INPUT_PULLUP) */
-#define BTN_MODE   5        // đổi chế độ Auto/Manual
-#define BTN_MANUAL 17       // bật/tắt bơm khi đang Manual
+/* Buttons (INPUT_PULLUP) */
+#define BTN_MODE   5
+#define BTN_MANUAL 17
 
 DHT dht(DHTPIN, DHTTYPE);
 
 /* ================== Shared State ================== */
-// Đặt volatile vì được truy cập từ nhiều task
-volatile int   soilValue = 0;        // % đất (0..100)
-volatile int   lightValue = 0;       // % ánh sáng (0..100)
-volatile bool  tankHasWater = true;  // bồn có nước?
-volatile bool  isRaining = false;    // mưa?
-volatile int   rainRawValue = 0;     // raw ADC 0..4095 (để publish/convert %)
-volatile float temp = NAN;           // nhiệt độ C
-volatile float hum  = NAN;           // độ ẩm%
+volatile int   soilValue = 0;
+volatile int   lightValue = 0;
+volatile bool  tankHasWater = true;
+volatile bool  isRaining = false;
+volatile int   rainRawValue = 0;
+volatile float temp = NAN;
+volatile float hum  = NAN;
 
-/* Cờ chế độ điều khiển (đọc/ghi từ nhiều task) */
+/* Modes */
 bool manualMode = false;
 bool pumpManualState = false;
 
-/* Thời gian tưới & delay */
-const unsigned long SOIL_ABSORB_DELAY = 10000;  // chờ đất thấm sau 1 chu kỳ tưới (ms)
-const unsigned long WATER_TIME_HIGH   = 20000;  // tưới mức cao
-const unsigned long WATER_TIME_MEDIUM = 15000;  // tưới mức trung bình
-const unsigned long WATER_TIME_LOW    = 10000;  // tưới mức thấp
+/* Timing */
+const unsigned long SOIL_ABSORB_DELAY = 10000;
+const unsigned long WATER_TIME_HIGH   = 20000;
+const unsigned long WATER_TIME_MEDIUM = 15000;
+const unsigned long WATER_TIME_LOW    = 10000;
 
-/* Trạng thái logic bơm/tưới */
+/* State */
 enum WaterLevel { NO_WATER_TO_STOP, WAIT_SOIL_ABSORB, WATER_OFF, WATER_ON };
 enum IrrigationLevel { IRRIGATION_NONE, IRRIGATION_LOW, IRRIGATION_MEDIUM, IRRIGATION_HIGH };
 
-WaterLevel waterLevel = WATER_OFF;    // trạng thái bơm hiện tại
-unsigned long lastPumpOffTime = 0;    // mốc thời gian tắt bơm (để chờ thấm)
-bool pumpActive = false;              // bơm đang chạy theo AUTO?
-unsigned long pumpEndTime = 0;        // mốc thời gian sẽ tắt bơm
+WaterLevel waterLevel = WATER_OFF;
+unsigned long lastPumpOffTime = 0;
+bool pumpActive = false;
+unsigned long pumpEndTime = 0;
 
-/* ================== FreeRTOS Sync ================== */
-/**
- * dataMutex  : MUTEX bảo vệ nhóm biến sensor/shared state khi đọc/ghi
- * publishSem : COUNTING SEMAPHORE dùng làm "điểm hẹn" publish
- *             - Mỗi lần có sự kiện (cảm biến mới, đổi trạng thái, lệnh MQTT, timer) → xSemaphoreGive(publishSem)
- *             - mqttTask đợi xSemaphoreTake(publishSem) → gom tín hiệu (drain) → publish 1 lần
- */
+/* FreeRTOS Sync */
 SemaphoreHandle_t dataMutex;
 SemaphoreHandle_t publishSem;
 
-#define PUB_SEM_MAX     20       // số lượng tín hiệu tối đa hàng đợi
-#define TELE_PERIOD_MS  15000    // chu kỳ gửi telemetry
+#define PUB_SEM_MAX     20
+// Tăng khoảng thời gian telemetry để giảm tần suất
+#define TELE_PERIOD_MS  30000    // 30s
 
-/* ================== Alert (anti-spam) ================== */
-// Cờ để không spam alert lặp lại
+/* Alert anti-spam */
 bool prevTankEmpty = false;
 bool prevSoilDry   = false;
 bool prevHighTemp  = false;
 
-/* Ngưỡng cảnh báo / mưa */
-const int   SOIL_DRY_THRESH      = 15;   // ẩm đất <= 15% coi như "đất khô"
-const float HIGH_TEMP_THRESH     = 35;   // nhiệt độ >= 35*C coi như "nhiệt cao"
-const int   RAIN_ADC_THRESHOLD   = 2500; // 0..4095 (>=ngưỡng => MƯA) SỬA THEO THỰC TẾ
-const int   TANK_DIGITAL_ACTIVE  = HIGH; // nếu module báo HIGH khi có nước; sửa nếu ngược
+/* Thresholds */
+const int   SOIL_DRY_THRESH      = 15;
+const float HIGH_TEMP_THRESH     = 35.0;
+const int   RAIN_ADC_THRESHOLD   = 2500;
+const int   TANK_DIGITAL_ACTIVE  = HIGH;
 
 /* MQTT client TLS */
 WiFiClientSecure espClient;
 PubSubClient client(espClient);
 
-/* ================== WiFi ================== */
+/* ============= Helpers ============= */
 void setup_wifi() {
   Serial.println();
   Serial.printf("🔌 Kết nối WiFi: %s\n", ssid);
@@ -125,8 +123,6 @@ void setup_wifi() {
   Serial.println(WiFi.localIP());
 }
 
-/* ================== MQTT ================== */
-// Đảm bảo đã kết nối tới broker, nếu chưa thì kết nối lại
 void mqttEnsureConnected() {
   while (!client.connected()) {
     Serial.print("🔄 Kết nối MQTT...");
@@ -142,7 +138,6 @@ void mqttEnsureConnected() {
   }
 }
 
-/* Callback khi có message đến TOPIC_CMD */
 void mqttCallback(char* topic, byte* payload, unsigned int length) {
   String msg;
   for (unsigned int i = 0; i < length; i++) msg += (char)payload[i];
@@ -165,11 +160,10 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
     Serial.println("⚠️ Lệnh không hợp lệ");
     return;
   }
-  xSemaphoreGive(publishSem); // báo publish vì trạng thái thay đổi
+  xSemaphoreGive(publishSem);
 }
 
-/* ================== Buttons ================== */
-// Hàm quét nút có chống dội
+/* Buttons (debounce) */
 void checkButtons() {
   static int modeStable = HIGH, manualStable = HIGH;
   static int modeLastReading = HIGH, manualLastReading = HIGH;
@@ -179,7 +173,6 @@ void checkButtons() {
   int modeReading = digitalRead(BTN_MODE);
   int manualReading = digitalRead(BTN_MANUAL);
 
-  // Chống dội cho nút MODE
   if (modeReading != modeLastReading) {
     lastDebounceMode = millis();
     modeLastReading = modeReading;
@@ -195,7 +188,6 @@ void checkButtons() {
     }
   }
 
-  // Chống dội cho nút MANUAL (chỉ khi đang MANUAL)
   if (manualReading != manualLastReading) {
     lastDebounceManual = millis();
     manualLastReading = manualReading;
@@ -212,7 +204,6 @@ void checkButtons() {
   }
 }
 
-// Task quét nút bấm định kỳ
 void buttonTask(void *pv) {
   while (1) {
     checkButtons();
@@ -220,24 +211,22 @@ void buttonTask(void *pv) {
   }
 }
 
-/* ================== Helpers ================== */
-// Helper publish an toàn (log nếu payload quá lớn)
+/* safePublish */
 bool safePublish(const char* topic, const char* payload) {
   bool ok = client.publish(topic, payload);
   if (!ok) {
-    Serial.printf("⚠️ publish thất bại (có thể do payload quá lớn). topic=%s, len=%d\n",
-                  topic, (int)strlen(payload));
+    Serial.printf("⚠️ publish thất bại. topic=%s, len=%d\n", topic, (int)strlen(payload));
   }
   return ok;
 }
 
-// Bật/tắt bơm + LED
+/* setPumpState - giữ nguyên nhưng bạn có thể bổ sung guard nếu cần */
 void setPumpState(bool on) {
   digitalWrite(RELAY_PIN, on ? HIGH : LOW);
   digitalWrite(LED_PUMP,  on ? HIGH : LOW);
 }
 
-/* Tính mức tưới dựa theo các điểm số */
+/* Tính mức tưới */
 enum IrrigationLevel calculateIrrigationLevel(int soil, int light, float t, float h) {
   int soilScore = 0, tempScore = 0, humScore = 0, lightScore = 0;
 
@@ -245,12 +234,16 @@ enum IrrigationLevel calculateIrrigationLevel(int soil, int light, float t, floa
   else if (soil < 40) soilScore = 25;
   else if (soil < 60) soilScore = 10;
 
-  if (t > 30) tempScore = 30;
-  else if (t > 27) tempScore = 20;
-  else if (t > 24) tempScore = 10;
+  if (!isnan(t)) {
+    if (t > 30) tempScore = 30;
+    else if (t > 27) tempScore = 20;
+    else if (t > 24) tempScore = 10;
+  }
 
-  if (h < 40) humScore = 20;
-  else if (h < 60) humScore = 10;
+  if (!isnan(h)) {
+    if (h < 40) humScore = 20;
+    else if (h < 60) humScore = 10;
+  }
 
   if (light > 70) lightScore = 15;
   else if (light > 40) lightScore = 7;
@@ -265,33 +258,28 @@ enum IrrigationLevel calculateIrrigationLevel(int soil, int light, float t, floa
   else return IRRIGATION_NONE;
 }
 
-/* ================== Tasks ================== */
-// Task đọc cảm biến định kỳ
+/* ========== Tasks ========== */
+// readSensorsTask
 void readSensorsTask(void *pv) {
   vTaskDelay(pdMS_TO_TICKS(2000));
   while (1) {
-    // Đọc ẩm đất (map về %)
     int soil = map(analogRead(SOIL_PIN), 0, 4095, 100, 0);
     soil = constrain(soil, 0, 100);
 
-    // Đọc ánh sáng (map về %)
     int light = map(analogRead(LDR_PIN), 0, 4095, 100, 0);
     light = constrain(light, 0, 100);
 
-    // tank module digital: HIGH= còn nước (tuỳ module)
     bool tank = (digitalRead(WATER_TANK_PIN) == TANK_DIGITAL_ACTIVE);
 
-    // DHT22
     float t = dht.readTemperature();
     float h = dht.readHumidity();
 
-    // rain sensor (analog)
     int rainRaw = analogRead(RAIN_PIN);
     bool raining = (rainRaw >= RAIN_ADC_THRESHOLD);
+
     Serial.printf("🌧 Lượng mưa : %d -> %s | Đất : %d | Thùng nước : %s\n",
                   rainRaw, raining ? "Mưa" : "Không mưa", soil, tank ? "Đầy" : "Hết");
 
-    // Ghi vào biến dùng chung → cần khóa mutex
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(50)) == pdTRUE) {
       soilValue     = soil;
       lightValue    = light;
@@ -303,7 +291,7 @@ void readSensorsTask(void *pv) {
       xSemaphoreGive(dataMutex);
     }
 
-    /* ===== Cảnh báo chống spam (chỉ bắn khi chuyển trạng thái) ===== */
+    // Alerts (anti-spam)
     bool tankEmptyNow = !tank;
     bool soilDryNow   = (soil <= SOIL_DRY_THRESH);
     bool highTempNow  = (!isnan(t) && t >= HIGH_TEMP_THRESH);
@@ -329,33 +317,30 @@ void readSensorsTask(void *pv) {
       xSemaphoreGive(publishSem);
     } else if (!highTempNow && prevHighTemp) prevHighTemp = false;
 
-    // Luôn báo có dữ liệu mới (cho phép coalesce ở mqttTask)
+    // Always signal new data (coalesce in mqttTask)
     xSemaphoreGive(publishSem);
     vTaskDelay(pdMS_TO_TICKS(7000));
   }
 }
 
-// pumpControlTask: tắt bơm khi mưa (isRaining)
+// pumpControlTask
 void pumpControlTask(void *pv) {
   Serial.println("⏳ Khởi động điều khiển bơm (chờ 5s)...");
   vTaskDelay(pdMS_TO_TICKS(5000));
 
   while (1) {
-    // Lấy snapshot dữ liệu (khóa trong thời gian ngắn)
     int s; int l; bool tank; float t; float h; bool raining;
     if (xSemaphoreTake(dataMutex, pdMS_TO_TICKS(20)) == pdTRUE) {
       s = soilValue; l = lightValue; tank = tankHasWater; t = temp; h = hum; raining = isRaining;
       xSemaphoreGive(dataMutex);
     }
 
-    // Nếu đang MANUAL → bơm theo người dùng, không can thiệp logic AUTO
     if (manualMode) {
       setPumpState(pumpManualState);
       vTaskDelay(pdMS_TO_TICKS(150));
       continue;
     }
 
-    // Nếu hết nước trong bồn → tắt bơm, chờ có nước
     if (!tank) {
       setPumpState(false);
       pumpActive = false;
@@ -364,7 +349,6 @@ void pumpControlTask(void *pv) {
       continue;
     }
 
-    // Nếu mưa → tắt bơm ngay
     if (raining) {
       setPumpState(false);
       pumpActive = false;
@@ -374,12 +358,11 @@ void pumpControlTask(void *pv) {
       continue;
     }
 
-    // Nếu bơm đang chạy → kiểm tra hết thời gian chưa
     if (pumpActive) {
       if (millis() >= pumpEndTime) {
         setPumpState(false);
         pumpActive = false;
-        waterLevel = WAIT_SOIL_ABSORB;       // chuyển sang chờ đất thấm
+        waterLevel = WAIT_SOIL_ABSORB;
         lastPumpOffTime = millis();
         Serial.println("✅ Hoàn tất 1 chu kỳ bơm, chờ đất thấm");
         xSemaphoreGive(publishSem);
@@ -388,32 +371,27 @@ void pumpControlTask(void *pv) {
       continue;
     }
 
-    // Nếu đang chờ thấm → đợi
     if (waterLevel == WAIT_SOIL_ABSORB) {
       if (millis() - lastPumpOffTime >= SOIL_ABSORB_DELAY) waterLevel = WATER_OFF;
       vTaskDelay(pdMS_TO_TICKS(150));
       continue;
     }
 
-    // Tính mức tưới
     IrrigationLevel level = calculateIrrigationLevel(s, l, t, h);
     if (level != IRRIGATION_NONE) {
       waterLevel = WATER_ON;
       pumpActive = true;
       switch (level) {
         case IRRIGATION_HIGH:
-          pumpEndTime = millis() + WATER_TIME_HIGH; Serial.println("💧 Tưới nhiều");
-          break;
+          pumpEndTime = millis() + WATER_TIME_HIGH; Serial.println("💧 Tưới nhiều"); break;
         case IRRIGATION_MEDIUM:
-          pumpEndTime = millis() + WATER_TIME_MEDIUM; Serial.println("💧 Tưới vừa");
-          break;
+          pumpEndTime = millis() + WATER_TIME_MEDIUM; Serial.println("💧 Tưới vừa"); break;
         case IRRIGATION_LOW:
-          pumpEndTime = millis() + WATER_TIME_LOW; Serial.println("💧 Tưới ít");
-          break;
+          pumpEndTime = millis() + WATER_TIME_LOW; Serial.println("💧 Tưới ít"); break;
         default: break;
       }
-      setPumpState(true);                    // bật bơm phần cứng
-      xSemaphoreGive(publishSem);            // báo publish ngay trạng thái
+      setPumpState(true);
+      xSemaphoreGive(publishSem);
     }
     vTaskDelay(pdMS_TO_TICKS(150));
   }
@@ -424,6 +402,7 @@ void pumpControlTask(void *pv) {
 void mqttTask(void *pv) {
   const TickType_t TELE_PERIOD = pdMS_TO_TICKS(TELE_PERIOD_MS);
   TickType_t lastTele = xTaskGetTickCount();
+  TickType_t lastDebug = xTaskGetTickCount();
 
   for (;;) {
     mqttEnsureConnected();
@@ -435,15 +414,15 @@ void mqttTask(void *pv) {
       lastTele = xTaskGetTickCount();
     }
 
-    // Chờ tín hiệu publish (Counting Semaphore)
-    if (xSemaphoreTake(publishSem, pdMS_TO_TICKS(200)) == pdTRUE) {
+    // Chờ tín hiệu publish (tăng timeout để giảm wake-ups)
+    if (xSemaphoreTake(publishSem, pdMS_TO_TICKS(3000)) == pdTRUE) {
 
-      // ===== COALESCE: gom hết token còn lại trong hàng đợi để publish 1 lần =====
+      // Coalesce: drain remaining tokens để publish 1 lần
       while (uxSemaphoreGetCount(publishSem) > 0) {
         xSemaphoreTake(publishSem, 0);
       }
 
-      // ---- Chụp snapshot dữ liệu an toàn dưới mutex ----
+      // Snapshot dữ liệu
       int s = 0, l = 0, rainRaw = 0;
       float t = NAN, h = NAN;
       bool tank = true, mode = false, raining = false;
@@ -465,7 +444,6 @@ void mqttTask(void *pv) {
       wl   = waterLevel;
       pumpOn = mode ? pumpManualState : (wl == WATER_ON || pumpActive);
 
-      // Tính % mưa từ raw (0..4095 -> 0..100). Lưu ý: nếu module đảo thì đổi 100 - rainPct.
       int rainPct = map(rainRaw, 0, 4095, 0, 100);
       rainPct = constrain(rainPct, 0, 100);
 
@@ -473,42 +451,125 @@ void mqttTask(void *pv) {
       const char* pumpStr = pumpOn ? "Bật" : "Tắt";
       const char* modeStr = mode ? "Thủ công" : "Tự động";
 
-      // ===== 1) Chuỗi “đẹp” để debug nhanh (emoji) - 1 dòng có cả mưa =====
+      // ===== 1) PRETTY: in ra Serial (human-readable) =====
       char pretty[384];
-      snprintf(pretty, sizeof(pretty),
-        "🌡Nhiệt độ: %.1f°C | 💧Độ ẩm: %.1f%% | 🌱Đất: %d%% | ☀️Ánh sáng: %d%% | 🌧Mưa: %d%% (%s) | 🪣Thùng nước: %s | Bơm: %s | Chế độ: %s",
-        t, h, s, l, rainPct, raining ? "Mưa" : "Không mưa",
-        tankStr, pumpStr, modeStr
-      );
+      // Nếu temp/hum là NaN thì in "--" thay vì nan
+      if (isnan(t)) t = NAN; // keep NAN for formatting check below
+      if (isnan(h)) h = NAN;
 
-      safePublish(TOPIC_PRETTY, pretty);
+      // Format với kiểm tra isnan — dùng sprintf trực tiếp khó kiểm soát, nên build bằng snprintf tuỳ trường hợp
+      if (isnan(t) || isnan(h)) {
+        // show -- cho temp/hum nếu NaN
+        if (isnan(t) && isnan(h)) {
+          snprintf(pretty, sizeof(pretty),
+                   "🌡Nhiệt độ: -- | 💧Độ ẩm: -- | 🌱Đất: %d%% | ☀️Ánh sáng: %d%% | 🌧Mưa: %d%% (%s) | 🪣Thùng nước: %s | Bơm: %s | Chế độ: %s",
+                   s, l, rainPct, raining ? "Mưa" : "Không mưa", tankStr, pumpStr, modeStr);
+        } else if (isnan(t)) {
+          snprintf(pretty, sizeof(pretty),
+                   "🌡Nhiệt độ: -- | 💧Độ ẩm: %.1f%% | 🌱Đất: %d%% | ☀️Ánh sáng: %d%% | 🌧Mưa: %d%% (%s) | 🪣Thùng nước: %s | Bơm: %s | Chế độ: %s",
+                   h, s, l, rainPct, raining ? "Mưa" : "Không mưa", tankStr, pumpStr, modeStr);
+        } else {
+          snprintf(pretty, sizeof(pretty),
+                   "🌡Nhiệt độ: %.1f°C | 💧Độ ẩm: -- | 🌱Đất: %d%% | ☀️Ánh sáng: %d%% | 🌧Mưa: %d%% (%s) | 🪣Thùng nước: %s | Bơm: %s | Chế độ: %s",
+                   t, s, l, rainPct, raining ? "Mưa" : "Không mưa", tankStr, pumpStr, modeStr);
+        }
+      } else {
+        snprintf(pretty, sizeof(pretty),
+                 "🌡Nhiệt độ: %.1f°C | 💧Độ ẩm: %.1f%% | 🌱Đất: %d%% | ☀️Ánh sáng: %d%% | 🌧Mưa: %d%% (%s) | 🪣Thùng nước: %s | Bơm: %s | Chế độ: %s",
+                 t, h, s, l, rainPct, raining ? "Mưa" : "Không mưa", tankStr, pumpStr, modeStr);
+      }
+
+      // ONLY print PRETTY to Serial (human readable)
       Serial.printf("📤 MQTT PRETTY: %s\n", pretty);
+      // Publish PRETTY
+      safePublish(TOPIC_PRETTY, pretty);
 
-      // ===== 2) Telemetry JSON gọn, đầy đủ =====
+      // ===== 2) TELE: chỉ publish lên MQTT (KHÔNG in ra Serial) =====
       char tele[512];
-      snprintf(tele, sizeof(tele),
-        "{"
-          "\"temp_c\":%.1f,"
-          "\"hum_pct\":%.1f,"
-          "\"soil_pct\":%d,"
-          "\"light_pct\":%d,"
-          "\"rain_raw\":%d,"
-          "\"rain_pct\":%d,"
-          "\"raining\":%s,"
-          "\"tank\":\"%s\","
-          "\"mode\":\"%s\","
-          "\"pump\":\"%s\""
-        "}",
-        t, h, s, l,
-        rainRaw, rainPct, (raining ? "true" : "false"),
-        tank ? "Đầy" : "Hết",
-        mode ? "Thủ công" : "Tự động",
-        pumpOn ? "Bật" : "Tắt"
-      );
-      safePublish(TOPIC_TELE, tele);
-      Serial.printf("📤 MQTT TELE: %s\n", tele);
+      // Build tele JSON carefully: if t/h NaN, put null to keep JSON valid
+      if (isnan(t) && isnan(h)) {
+        snprintf(tele, sizeof(tele),
+          "{"
+            "\"temp_c\":null,"
+            "\"hum_pct\":null,"
+            "\"soil_pct\":%d,"
+            "\"light_pct\":%d,"
+            "\"rain_raw\":%d,"
+            "\"rain_pct\":%d,"
+            "\"raining\":%s,"
+            "\"tank\":\"%s\","
+            "\"mode\":\"%s\","
+            "\"pump\":\"%s\""
+          "}",
+          s, l, rainRaw, rainPct, (raining ? "true" : "false"),
+          tank ? "Đầy" : "Hết",
+          mode ? "Thủ công" : "Tự động",
+          pumpOn ? "Bật" : "Tắt"
+        );
+      } else if (isnan(t)) {
+        snprintf(tele, sizeof(tele),
+          "{"
+            "\"temp_c\":null,"
+            "\"hum_pct\":%.1f,"
+            "\"soil_pct\":%d,"
+            "\"light_pct\":%d,"
+            "\"rain_raw\":%d,"
+            "\"rain_pct\":%d,"
+            "\"raining\":%s,"
+            "\"tank\":\"%s\","
+            "\"mode\":\"%s\","
+            "\"pump\":\"%s\""
+          "}",
+          h, s, l, rainRaw, rainPct, (raining ? "true" : "false"),
+          tank ? "Đầy" : "Hết",
+          mode ? "Thủ công" : "Tự động",
+          pumpOn ? "Bật" : "Tắt"
+        );
+      } else if (isnan(h)) {
+        snprintf(tele, sizeof(tele),
+          "{"
+            "\"temp_c\":%.1f,"
+            "\"hum_pct\":null,"
+            "\"soil_pct\":%d,"
+            "\"light_pct\":%d,"
+            "\"rain_raw\":%d,"
+            "\"rain_pct\":%d,"
+            "\"raining\":%s,"
+            "\"tank\":\"%s\","
+            "\"mode\":\"%s\","
+            "\"pump\":\"%s\""
+          "}",
+          t, s, l, rainRaw, rainPct, (raining ? "true" : "false"),
+          tank ? "Đầy" : "Hết",
+          mode ? "Thủ công" : "Tự động",
+          pumpOn ? "Bật" : "Tắt"
+        );
+      } else {
+        snprintf(tele, sizeof(tele),
+          "{"
+            "\"temp_c\":%.1f,"
+            "\"hum_pct\":%.1f,"
+            "\"soil_pct\":%d,"
+            "\"light_pct\":%d,"
+            "\"rain_raw\":%d,"
+            "\"rain_pct\":%d,"
+            "\"raining\":%s,"
+            "\"tank\":\"%s\","
+            "\"mode\":\"%s\","
+            "\"pump\":\"%s\""
+          "}",
+          t, h, s, l,
+          rainRaw, rainPct, (raining ? "true" : "false"),
+          tank ? "Đầy" : "Hết",
+          mode ? "Thủ công" : "Tự động",
+          pumpOn ? "Bật" : "Tắt"
+        );
+      }
 
-      // ===== 3) JSON state tóm tắt =====
+      // Publish telemetry but DO NOT Serial.print it
+      safePublish(TOPIC_TELE, tele);
+
+      // ===== 3) State (tóm tắt) =====
       char stateMsg[160];
       snprintf(stateMsg, sizeof(stateMsg),
         "{"
@@ -519,7 +580,19 @@ void mqttTask(void *pv) {
         pumpOn ? "BẬT 🚰" : "TẮT ⛔"
       );
       safePublish(TOPIC_STATE, stateMsg);
+
+      // End publish handling
+    } // end if semaphore
+
+    // In định kỳ debug heap/stack (giảm tần suất)
+    if (xTaskGetTickCount() - lastDebug >= pdMS_TO_TICKS(60000)) { // 60s
+      Serial.printf("[DEBUG] Free heap: %d bytes | mqttTask stack watermark: %u\n",
+                    ESP.getFreeHeap(), (unsigned)uxTaskGetStackHighWaterMark(NULL));
+      lastDebug = xTaskGetTickCount();
     }
+
+    // Cho CPU nghỉ tránh busy-loop; điều chỉnh để giảm wake-ups
+    vTaskDelay(pdMS_TO_TICKS(3000)); // 3s
   }
 }
 
@@ -528,20 +601,19 @@ void setup() {
   Serial.begin(115200);
   dht.begin();
 
-  // Cấu hình IO
+  // IO setup
   pinMode(SOIL_PIN, INPUT);
   pinMode(LDR_PIN, INPUT);
   pinMode(WATER_TANK_PIN, INPUT);
-  pinMode(RAIN_PIN, INPUT);      // analog
+  pinMode(RAIN_PIN, INPUT);
   pinMode(RELAY_PIN, OUTPUT);
   pinMode(LED_PUMP, OUTPUT);
-  setPumpState(false);           // mặc định tắt bơm
+  setPumpState(false);
 
-  // Nút nhấn dùng PULLUP (nhả = HIGH, nhấn = LOW)
   pinMode(BTN_MODE, INPUT_PULLUP);
   pinMode(BTN_MANUAL, INPUT_PULLUP);
 
-  // Tạo Mutex & Counting Semaphore
+  // Create mutex & semaphore
   dataMutex  = xSemaphoreCreateMutex();
   publishSem = xSemaphoreCreateCounting(PUB_SEM_MAX, 0);
 
@@ -550,23 +622,23 @@ void setup() {
     while (1) vTaskDelay(pdMS_TO_TICKS(1000));
   }
 
-  // Kết nối WiFi + cấu hình MQTT
+  // WiFi + MQTT
   setup_wifi();
-  espClient.setInsecure();                 // dùng TLS không kiểm chứng (demo)
+  espClient.setInsecure();
   client.setServer(mqtt_broker, mqtt_port);
-  client.setBufferSize(1024);              // 🔧 tăng buffer để không tràn khi publish JSON dài/emoji
+  client.setBufferSize(1024);
   client.setCallback(mqttCallback);
 
-  // Tạo các task (pin vào core 1 cho ổn định IO)
+  // Create tasks (pin to core 1)
   xTaskCreatePinnedToCore(readSensorsTask, "ReadSensors", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(pumpControlTask, "PumpControl", 4096, NULL, 1, NULL, 1);
   xTaskCreatePinnedToCore(buttonTask,      "ButtonTask",  2048, NULL, 2, NULL, 1);
-  xTaskCreatePinnedToCore(mqttTask,        "MQTTTask",    6144, NULL, 2, NULL, 1); // tăng stack cho JSON dài
+  xTaskCreatePinnedToCore(mqttTask,        "MQTTTask",    6144, NULL, 2, NULL, 1);
 
-  // Ép publish 1 lần lúc khởi động để có dữ liệu ban đầu
+  // Initial publish
   xSemaphoreGive(publishSem);
 }
 
 void loop() {
-  // Không dùng loop() vì mọi thứ đã chạy trong FreeRTOS tasks
+  // All work handled in tasks
 }
